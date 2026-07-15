@@ -164,6 +164,18 @@
             border-top: 6px solid var(--primary-color);
         }
 
+        /* 警告メッセージ用スタイル */
+        .config-warning {
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1.5rem;
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+
         .comment-form {
             display: flex;
             flex-direction: column;
@@ -359,6 +371,12 @@
         <section class="comment-section">
             <h2 class="section-title">購入者レビュー＆手料理ギャラリー</h2>
             
+            <!-- Firebase未設定時に表示される案内枠 -->
+            <div id="setupWarning" class="config-warning" style="display: none;">
+                <strong>⚠️ Firebaseの設定（Config）が完了していません</strong><br>
+                HTMLコードの下部にある <code>firebaseConfig</code> の値を、ご自身のFirebaseプロジェクトのデータに書き換えると、このコメント機能が有効になります。現在は仮データでの表示デモ状態です。
+            </div>
+
             <form id="commentForm" class="comment-form">
                 <div class="form-group">
                     <label for="userName">お名前（ニックネーム）</label>
@@ -372,11 +390,11 @@
                     <label for="imageFile">料理や野菜の画像（任意）</label>
                     <input type="file" id="imageFile" accept="image/*">
                 </div>
-                <button type="submit" class="submit-btn">感想を投稿する</button>
+                <button type="submit" id="submitBtn" class="submit-btn">感想を投稿する</button>
             </form>
 
             <div id="commentList" class="comment-list">
-                <!-- ここに投稿されたコメントが新しい順に表示されます -->
+                <!-- 投稿コメント一覧 -->
             </div>
         </section>
 
@@ -392,81 +410,136 @@
         import { getFirestore, collection, addDoc, getDocs, orderBy, query, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
         // 【ここに自分のconfigを貼る】
-        const firebaseConfig = {
+       const firebaseConfig = {
  　　　 apiKey: "AIzaSyBA27aH0abDXDbeIJPwqQTCf1QTOVc_VAc",
-　　　  authDomain: "sanchoku-c9acc.firebaseapp.com",
+ 　　　 authDomain: "sanchoku-c9acc.firebaseapp.com",
 　　　  projectId: "sanchoku-c9acc",
 　　　  storageBucket: "sanchoku-c9acc.firebasestorage.app",
 　　　  messagingSenderId: "250595490879",
 　　　  appId: "1:250595490879:web:30f47c4a631c7550454c8a"
-
         };
 
-        // Firebase初期化
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
-
+        const warningDiv = document.getElementById('setupWarning');
         const commentForm = document.getElementById('commentForm');
         const commentList = document.getElementById('commentList');
+        const submitBtn = document.getElementById('submitBtn');
 
-        // コメント一覧を取得して表示する関数
-        async function loadComments() {
+        // 仮のデモデータ（Firebase未設定時に表示）
+        const demoComments = [
+            {
+                name: "西条トマト大好き",
+                content: "トマトがとってもジューシーで甘くて驚きました！スライスしてシンプルに塩とオリーブオイルだけでごちそうになりました。また絶対買います！",
+                createdAt: { toDate: () => new Date() }
+            },
+            {
+                name: "料理パパ",
+                content: "ピーマンを肉詰めにしました。肉厚でピーマンの苦味が少なく、普段野菜を嫌がる子供たちも「美味しい！」とおかわりしてくれました。高品質で安くて助かります！",
+                createdAt: { toDate: () => new Date(Date.now() - 86400000) }
+            }
+        ];
+
+        let db = null;
+        let isFirebaseActive = false;
+
+        // Firebaseの初期化テスト
+        if (firebaseConfig.apiKey && firebaseConfig.apiKey !== "YOUR_API_KEY") {
             try {
-                commentList.innerHTML = ''; // 一度クリア
-                
-                // 新しい順(createdAt: desc)にクエリを組む
-                const q = query(collection(db, "comments"), orderBy("createdAt", "desc"));
-                const querySnapshot = await getDocs(q);
-                
-                querySnapshot.forEach((doc) => {
-                    const data = doc.data();
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                isFirebaseActive = true;
+            } catch (e) {
+                console.error("Firebaseの初期化に失敗しました。設定を確認してください:", e);
+                warningDiv.style.display = "block";
+                warningDiv.textContent = "⚠️ Firebaseの初期化中にエラーが発生しました。Configの値が正しいか確認してください。";
+            }
+        } else {
+            // 未設定の場合は警告を表示し、デモモードに移行
+            warningDiv.style.display = "block";
+        }
+
+        // コメントを表示する関数
+        async function loadComments() {
+            commentList.innerHTML = '';
+            
+            if (isFirebaseActive && db) {
+                try {
+                    const q = query(collection(db, "comments"), orderBy("createdAt", "desc"));
+                    const querySnapshot = await getDocs(q);
                     
-                    // 要素の生成
-                    const item = document.createElement('div');
-                    item.className = 'comment-item';
-                    
-                    const header = document.createElement('div');
-                    header.className = 'comment-header';
-                    
-                    const userSpan = document.createElement('span');
-                    userSpan.className = 'comment-user';
-                    userSpan.textContent = data.name; // 安全な表示
-                    
-                    const dateSpan = document.createElement('span');
-                    if (data.createdAt) {
-                        const date = data.createdAt.toDate();
-                        dateSpan.textContent = date.toLocaleString('ja-JP');
-                    } else {
-                        dateSpan.textContent = 'ただいま投稿中...';
+                    if (querySnapshot.empty) {
+                        const noComment = document.createElement('p');
+                        noComment.style.textAlign = 'center';
+                        noComment.style.color = '#777';
+                        noComment.textContent = 'まだ感想がありません。最初のレビューを投稿してみませんか？';
+                        commentList.appendChild(noComment);
+                        return;
                     }
-                    
-                    header.appendChild(userSpan);
-                    header.appendChild(dateSpan);
-                    
-                    const textP = document.createElement('p');
-                    textP.className = 'comment-text';
-                    textP.textContent = data.content; // 安全な表示
-                    
-                    item.appendChild(header);
-                    item.appendChild(textP);
-                    
-                    // 画像データ(Base64リレー)がある場合は表示
-                    if (data.image) {
-                        const img = document.createElement('img');
-                        img.className = 'comment-img';
-                        img.src = data.image; // 投稿された画像データ
-                        img.alt = '購入者の投稿画像';
-                        item.appendChild(img);
-                    }
-                    
-                    commentList.appendChild(item);
-                });
-            } catch (error) {
-                console.error("データ取得エラー: ", error);
+
+                    querySnapshot.forEach((doc) => {
+                        renderCommentRow(doc.data());
+                    });
+                } catch (error) {
+                    console.error("データ取得エラー: ", error);
+                    warningDiv.style.display = "block";
+                    warningDiv.textContent = "⚠️ データベースからデータを取得できませんでした。Firestoreのセキュリティルールがテストモード（全員許可）になっているか確認してください。";
+                    loadDemoComments();
+                }
+            } else {
+                loadDemoComments();
             }
         }
 
-        // 画像ファイルをBase64文字列に変換するヘルパー関数
+        // デモ用コメントを読み込む
+        function loadDemoComments() {
+            demoComments.forEach(data => renderCommentRow(data));
+        }
+
+        // 1件分のコメントをHTMLに構築して追加する関数（安全対策でtextContentを使用）
+        function renderCommentRow(data) {
+            const item = document.createElement('div');
+            item.className = 'comment-item';
+            
+            const header = document.createElement('div');
+            header.className = 'comment-header';
+            
+            const userSpan = document.createElement('span');
+            userSpan.className = 'comment-user';
+            userSpan.textContent = data.name; // ユーザー入力を安全に表示
+            
+            const dateSpan = document.createElement('span');
+            if (data.createdAt) {
+                try {
+                    const date = data.createdAt.toDate();
+                    dateSpan.textContent = date.toLocaleString('ja-JP');
+                } catch (e) {
+                    dateSpan.textContent = '投稿済み';
+                }
+            } else {
+                dateSpan.textContent = 'ただいま投稿中...';
+            }
+            
+            header.appendChild(userSpan);
+            header.appendChild(dateSpan);
+            
+            const textP = document.createElement('p');
+            textP.className = 'comment-text';
+            textP.textContent = data.content; // ユーザー入力を安全に表示
+            
+            item.appendChild(header);
+            item.appendChild(textP);
+            
+            if (data.image) {
+                const img = document.createElement('img');
+                img.className = 'comment-img';
+                img.src = data.image; // アップロードされた画像データ（Base64）
+                img.alt = '購入者の投稿画像';
+                item.appendChild(img);
+            }
+            
+            commentList.appendChild(item);
+        }
+
+        // 画像ファイルをBase64に変換するヘルパー
         function convertFileToBase64(file) {
             return new Promise((resolve, reject) => {
                 const reader = new FileReader();
@@ -476,7 +549,7 @@
             });
         }
 
-        // 送信ボタンの処理
+        // フォーム送信時のイベント処理
         commentForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             
@@ -484,22 +557,30 @@
             const contentInput = document.getElementById('commentContent');
             const fileInput = document.getElementById('imageFile');
             
-            let base64Image = null;
+            if (!isFirebaseActive || !db) {
+                alert("現在は「デモモード」です。Firebaseの設定（Config）を書き換えることで、実際に投稿を保存できるようになります！");
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = "送信中...";
             
-            // 画像が選択されている場合はBase64化する
+            let base64Image = null;
             if (fileInput.files.length > 0) {
                 const file = fileInput.files[0];
                 try {
                     base64Image = await convertFileToBase64(file);
                 } catch (err) {
-                    console.error("画像読み込みエラー:", err);
+                    console.error("画像の読み込み失敗:", err);
                     alert("画像の読み込みに失敗しました。");
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = "感想を投稿する";
                     return;
                 }
             }
             
             try {
-                // collection(db, "comments") に addDoc でデータを追加
+                // collection(db, "comments") にデータを addDoc で追加
                 await addDoc(collection(db, "comments"), {
                     name: nameInput.value,
                     content: contentInput.value,
@@ -507,18 +588,18 @@
                     createdAt: serverTimestamp()
                 });
                 
-                // フォームの初期化
                 commentForm.reset();
-                
-                // 一覧の再読み込み
                 await loadComments();
             } catch (error) {
-                console.error("投稿エラー: ", error);
-                alert("投稿に失敗しました。Firebaseの接続設定やルールを確認してください。");
+                console.error("投稿中にエラーが発生しました: ", error);
+                alert("投稿できませんでした。Firestoreの「ルール（Rules）」が読み書きを許可する設定になっているか確認してください。");
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = "感想を投稿する";
             }
         });
 
-        // 初期表示時にコメントを読み込む　
+        // 読み込み開始
         loadComments();
     </script>
 </body>
